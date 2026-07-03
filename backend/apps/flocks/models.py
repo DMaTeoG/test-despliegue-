@@ -44,6 +44,7 @@ class Flock(BaseModel):
 	# Relaciones
 	shed = models.ForeignKey(Shed, on_delete=models.CASCADE, related_name='flocks')
 	status = models.CharField(max_length=12, choices=STATUS_CHOICES, default='ACTIVE')
+	estimated_exit_date = models.DateField(null=True, blank=True)
 	created_by = models.ForeignKey(settings.AUTH_USER_MODEL, null=True, blank=True, on_delete=models.SET_NULL, related_name='created_flocks')
 
 	def __str__(self):
@@ -256,6 +257,7 @@ class MortalityRecord(BaseModel):
 	flock = models.ForeignKey(Flock, on_delete=models.CASCADE, related_name='mortality_records')
 	date = models.DateField()
 	deaths = models.PositiveIntegerField()
+	selection = models.PositiveIntegerField(default=0)
 	cause = models.ForeignKey(MortalityCause, on_delete=models.SET_NULL, null=True, blank=True)
 	recorded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
 
@@ -274,15 +276,16 @@ class MortalityRecord(BaseModel):
 		is_new = not self.pk
 
 		if is_new:
+			total_losses = self.deaths + self.selection
 			# Validar que no exceda cantidad actual
-			if self.deaths > self.flock.current_quantity:
+			if total_losses > self.flock.current_quantity:
 				from django.core.exceptions import ValidationError
 				raise ValidationError(
-					f"Mortalidad ({self.deaths}) excede cantidad actual del lote ({self.flock.current_quantity})"
+					f"Bajas totales ({total_losses}) excede cantidad actual del lote ({self.flock.current_quantity})"
 				)
 
 			# Actualizar lote
-			self.flock.current_quantity -= self.deaths
+			self.flock.current_quantity -= total_losses
 			self.flock.save(update_fields=['current_quantity'])
 
 		super().save(*args, **kwargs)
@@ -354,3 +357,77 @@ class ReferenceImportLog(BaseModel):
 	updates = models.PositiveIntegerField(default=0)
 	errors = models.PositiveIntegerField(default=0)
 	error_details = models.JSONField(default=list)
+
+
+class FlockShipment(BaseModel):
+	"""Registro de despacho y venta del lote a planta procesadora (Hoja PESAS)"""
+	flock = models.ForeignKey(Flock, on_delete=models.CASCADE, related_name='shipments')
+	date = models.DateField(help_text="Fecha de despacho")
+	invoice_number = models.CharField(max_length=50, help_text="Número de planilla/factura")
+	males_count = models.PositiveIntegerField(null=True, blank=True, help_text="Cantidad de machos despachados")
+	females_count = models.PositiveIntegerField(null=True, blank=True, help_text="Cantidad de hembras despachadas")
+	total_birds = models.PositiveIntegerField(help_text="Total aves despachadas")
+	average_weight_farm = models.DecimalField(max_digits=6, decimal_places=2, help_text="Peso promedio en granja (kg)")
+	total_weight_farm = models.DecimalField(max_digits=10, decimal_places=2, help_text="Kilos totales en granja")
+	dead_in_transit = models.PositiveIntegerField(default=0, help_text="Aves ahogadas en tránsito")
+	birds_received_plant = models.PositiveIntegerField(help_text="Pollos recibidos en planta")
+	average_weight_plant = models.DecimalField(max_digits=6, decimal_places=2, help_text="Peso promedio en planta (kg)")
+	total_weight_plant = models.DecimalField(max_digits=10, decimal_places=2, help_text="Kilos recibidos en planta")
+	plant_shrinkage_grams = models.DecimalField(max_digits=6, decimal_places=2, help_text="Merma de planta en gramos por pollo")
+	birds_sold = models.PositiveIntegerField(help_text="Pollos vendidos")
+	discount_kilos = models.DecimalField(max_digits=8, decimal_places=2, default=0.0, help_text="Kilos descontados")
+	total_weight_sold = models.DecimalField(max_digits=10, decimal_places=2, help_text="Kilos netos de venta")
+	average_weight_sold = models.DecimalField(max_digits=6, decimal_places=2, help_text="Peso promedio de venta (kg)")
+	total_shrinkage_grams = models.DecimalField(max_digits=6, decimal_places=2, help_text="Merma total en gramos")
+	notes = models.TextField(blank=True, help_text="Observaciones de liquidación")
+
+	def __str__(self):
+		return f"Despacho {self.invoice_number} - Lote {self.flock.id} - {self.date}"
+
+	def save(self, *args, **kwargs):
+		# Auto-calcular campos basados en fórmulas de la planilla si no están definidos
+		if not self.total_birds:
+			self.total_birds = (self.males_count or 0) + (self.females_count or 0)
+		
+		if not self.total_weight_farm or self.total_weight_farm == 0:
+			from decimal import Decimal
+			self.total_weight_farm = Decimal(str(self.total_birds)) * Decimal(str(self.average_weight_farm))
+		
+		if not self.birds_received_plant:
+			self.birds_received_plant = max(0, self.total_birds - self.dead_in_transit)
+
+		if (not self.plant_shrinkage_grams or self.plant_shrinkage_grams == 0) and self.birds_received_plant > 0:
+			from decimal import Decimal
+			# (kilos granja - kilos planta) / pollos planta * 1000
+			diff_kilos = Decimal(str(self.total_weight_farm)) - Decimal(str(self.total_weight_plant))
+			self.plant_shrinkage_grams = (diff_kilos / Decimal(str(self.birds_received_plant))) * Decimal('1000')
+
+		if not self.birds_sold:
+			self.birds_sold = self.birds_received_plant
+
+		if not self.average_weight_sold and self.birds_sold > 0:
+			from decimal import Decimal
+			self.average_weight_sold = Decimal(str(self.total_weight_sold)) / Decimal(str(self.birds_sold))
+
+		if (not self.total_shrinkage_grams or self.total_shrinkage_grams == 0) and self.birds_received_plant > 0:
+			from decimal import Decimal
+			# (kilos granja - kilos venta) / pollos planta * 1000
+			diff_kilos_total = Decimal(str(self.total_weight_farm)) - Decimal(str(self.total_weight_sold))
+			self.total_shrinkage_grams = (diff_kilos_total / Decimal(str(self.birds_received_plant))) * Decimal('1000')
+
+		is_new = not self.pk
+		if is_new:
+			# Validar que no despache más de los que hay disponibles
+			if self.total_birds > self.flock.current_quantity:
+				from django.core.exceptions import ValidationError
+				raise ValidationError(
+					f"La cantidad despachada ({self.total_birds}) supera la población actual del lote ({self.flock.current_quantity})"
+				)
+			
+			# Descontar del lote
+			self.flock.current_quantity -= self.total_birds
+			if self.flock.current_quantity == 0:
+				self.flock.status = 'SOLD'
+			self.flock.save(update_fields=['current_quantity', 'status'])
+
+		super().save(*args, **kwargs)

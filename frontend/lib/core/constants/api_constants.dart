@@ -19,7 +19,7 @@ class ApiConstants {
     // NOTA: Cambia esta IP a la de tu máquina cuando uses dispositivo físico
     // Para emulador Android usa: http://10.0.2.2:8000/
     // Para iOS Simulator usa: http://localhost:8000/
-    defaultValue: 'http://10.0.2.2:8000/',
+    defaultValue: 'http://172.20.10.2:8000/',
   );
 
   /// Modo debug: muestra logs adicionales

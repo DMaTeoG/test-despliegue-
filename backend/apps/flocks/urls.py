@@ -5,11 +5,13 @@ from .views_weight import DailyWeightViewSet, ShedDashboardView
 from .views_mortality import MortalityViewSet
 from .views_conflict import SyncConflictViewSet
 from .views import BreedReferenceViewSet
+from .views_shipment import FlockShipmentViewSet
 
 router = DefaultRouter()
 router.register(r'flocks', FlockViewSet, basename='flock')
 router.register(r'daily-weights', DailyWeightViewSet, basename='dailyweight')
 router.register(r'mortality', MortalityViewSet, basename='mortality')
+router.register(r'shipments', FlockShipmentViewSet, basename='flock-shipment')
 # NOTE: We explicitly register the flocks-local conflicts under 'flocks-conflicts' to
 # avoid a route name collision with the central `apps.sync` router which exposes
 # the canonical `/api/conflicts/` endpoints. This keeps the public API stable and

@@ -82,11 +82,17 @@ class InventoryItem(models.Model):
 		
 		# Stock normal sin histórico de consumo
 		return {'status': 'NORMAL', 'color': 'green', 'message': f'{current:.1f} {self.unit}'}
+
+	def update_consumption_metrics(self):
+		"""Actualiza el consumo diario promedio y la fecha del último consumo"""
+		end_date = timezone.now().date()
+		start_date = end_date - timedelta(days=30)
+		
 		total = self.consumption_records.filter(date__range=[start_date, end_date]).aggregate(
 			total=models.Sum('quantity_consumed')
 		)['total'] or 0
 
-		# Promedio por día
+		# Promedio por día en los últimos 30 días
 		self.daily_avg_consumption = float(total) / 30 if total else 0
 
 		last = self.consumption_records.order_by('-date').first()
@@ -183,6 +189,8 @@ class FoodBatch(models.Model):
 	supplier = models.CharField(max_length=100, blank=True)
 	lot_number = models.CharField(max_length=50, blank=True)
 	expiry_date = models.DateField(null=True, blank=True)
+	invoice_number = models.CharField(max_length=100, blank=True, help_text="Número de factura")
+	purchase_value = models.DecimalField(max_digits=12, decimal_places=2, default=0.0, help_text="Valor de compra")
 	
 	class Meta:
 		ordering = ['entry_date']
